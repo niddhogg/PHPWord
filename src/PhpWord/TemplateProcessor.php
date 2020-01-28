@@ -46,6 +46,7 @@ class TemplateProcessor
      *
      * @var string
      */
+    // must be protected
     protected $tempDocumentMainPart;
 
     /**
@@ -61,7 +62,11 @@ class TemplateProcessor
      * @var string[]
      */
     protected $tempDocumentFooters = array();
-
+    
+    
+    // hyperlinks too...
+    public $tempRels = array();
+    
     /**
      * @since 0.12.0 Throws CreateTemporaryFileException and CopyFileException instead of Exception
      *
@@ -101,6 +106,10 @@ class TemplateProcessor
             $index++;
         }
         $this->tempDocumentMainPart = $this->fixBrokenMacros($this->zipClass->getFromName($this->getMainPartName()));
+        
+        // new: reletionships
+        $this->tempRels = $this->zipClass->getFromName($this->getRelsPartName());
+         
     }
 
     /**
@@ -169,6 +178,7 @@ class TemplateProcessor
         $this->tempDocumentHeaders = $this->transformXml($this->tempDocumentHeaders, $xsltProcessor);
         $this->tempDocumentMainPart = $this->transformXml($this->tempDocumentMainPart, $xsltProcessor);
         $this->tempDocumentFooters = $this->transformXml($this->tempDocumentFooters, $xsltProcessor);
+        
     }
 
     /**
@@ -211,6 +221,7 @@ class TemplateProcessor
                 $item = self::ensureMacroCompleted($item);
             }
         } else {
+            // probably can get rid of macros ensuring here...
             $search = self::ensureMacroCompleted($search);
         }
 
@@ -230,6 +241,12 @@ class TemplateProcessor
         $this->tempDocumentHeaders = $this->setValueForPart($search, $replace, $this->tempDocumentHeaders, $limit);
         $this->tempDocumentMainPart = $this->setValueForPart($search, $replace, $this->tempDocumentMainPart, $limit);
         $this->tempDocumentFooters = $this->setValueForPart($search, $replace, $this->tempDocumentFooters, $limit);
+        
+        // new for hyperlinks
+        $search = str_replace("{","%7b",$search);
+        $search = str_replace("}","%7d",$search);
+        
+        $this->tempRels = $this->setValueForPart($search, $replace, $this->tempRels, $limit);
     }
 
     /**
@@ -354,12 +371,15 @@ class TemplateProcessor
      */
     public function replaceBlock($blockname, $replacement)
     {
+        /*
         preg_match(
-            '/(<\?xml.*)(<w:p.*>\${' . $blockname . '}<\/w:.*?p>)(.*)(<w:p.*\${\/' . $blockname . '}<\/w:.*?p>)/is',
+            //removed (<\?xml.*) from beginning regex
+            '/(<w:p.*>\${' . $blockname . '}<\/w:.*?p>)(.*)(<w:p.*\${\/' . $blockname . '}<\/w:.*?p>)/is',
             $this->tempDocumentMainPart,
             $matches
         );
 
+        
         if (isset($matches[3])) {
             $this->tempDocumentMainPart = str_replace(
                 $matches[2] . $matches[3] . $matches[4],
@@ -367,8 +387,84 @@ class TemplateProcessor
                 $this->tempDocumentMainPart
             );
         }
+         */
+        
+        //added to remove the start block sign
+        //$this->setValue($blockname, '');
+        
+        
+        // new method
+        // location of blockname open tag
+        /*
+        $startpos = strpos($this->tempDocumentMainPart,'${'.$blockname.'}');
+        if ($startpos) {
+            // start position of area to be replaced, this is from the start of the <w:p before the blockname
+            $startreplace = strrpos($this->tempDocumentMainPart,'<w:p',-(strlen($this->tempDocumentMainPart) - $startpos));
+            
+            // location of the blockname close tag
+            $endpos = strpos($this->tempDocumentMainPart,'${/'.$blockname.'}');
+            if ($endpos) {
+                // end position of the area to be replaced, to the end of the </w:p> after the close blockname
+                $endreplace = strpos($this->tempDocumentMainPart,'</w:p>',$endpos) + strlen('</w:p>');
+                
+                $replacelength = ($endpos-$startpos); 
+                $replaceXML = substr($this->tempDocumentMainPart,$startreplace,$replacelength);
+
+                $this->tempDocumentMainPart = str_replace(
+                    $replaceXML,
+                    $replacement,
+                    $this->tempDocumentMainPart
+                );
+               
+                
+                // remove last sign
+                $this->tempDocumentMainPart = str_replace(
+                    '${/'.$blockname.'}',
+                    '',
+                    $this->tempDocumentMainPart
+                );
+                
+            }
+        }
+         
+         */
     }
 
+    public function replaceBlockString($blockname, $replacement)
+    {
+        preg_match(
+                '/(\${' . $blockname . '})(.*)(\${\/' . $blockname . '})/is',
+                $this->tempDocumentMainPart,
+                $matches
+        );
+        if (isset($matches[2])) {
+            $this->tempDocumentMainPart = str_replace(
+                    $matches[1] . $matches[2] . $matches[3],
+                    $replacement,
+                    $this->tempDocumentMainPart
+            );
+        }
+    }
+    
+    public function deleteBlockString($blockname)
+    {
+        $this->replaceBlockString($blockname, '');
+    }
+    
+    public function removeBlockTag($blockname) {
+        $this->tempDocumentMainPart = str_replace(
+                '${'.$blockname.'}',
+                '',
+                $this->tempDocumentMainPart
+        );
+        
+        $this->tempDocumentMainPart = str_replace(
+                '${/'.$blockname.'}',
+                '',
+                $this->tempDocumentMainPart
+        );
+    }
+    
     /**
      * Delete a block of text.
      *
@@ -393,10 +489,13 @@ class TemplateProcessor
         }
 
         $this->zipClass->addFromString($this->getMainPartName(), $this->tempDocumentMainPart);
-
+       
         foreach ($this->tempDocumentFooters as $index => $xml) {
             $this->zipClass->addFromString($this->getFooterName($index), $xml);
         }
+        
+        // new: relationships
+        $this->zipClass->addFromString($this->getRelsPartName(), $this->tempRels);
 
         // Close zip file
         if (false === $this->zipClass->close()) {
@@ -507,6 +606,11 @@ class TemplateProcessor
     protected function getMainPartName()
     {
         return 'word/document.xml';
+    }
+    
+    protected function getRelsPartName()
+    {
+        return 'word/_rels/document.xml.rels';
     }
 
     /**
